@@ -866,4 +866,26 @@ OXE_DATASET_CONFIGS = {
     "state_encoding": StateEncoding.JOINT_BIMANUAL,  
     "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,  
     },
+    # [RoboTwin] beat_block_hammer 任务
+    # image_obs_keys: 对应 RLDS 中 observation/ 下的图像字段名
+    #   primary → head_camera, secondary → front_camera (low_cam)
+    #   left_wrist → left_camera, right_wrist → right_camera
+    # state_obs_keys: 对应 RLDS 中 observation/state (14维关节角度绝对值)
+    # action_encoding: JOINT_POS_BIMANUAL → 14维双臂关节角度绝对值
+    "aloha_beat_block_hammer": {
+    "image_obs_keys": {
+        "primary": "image",
+        "secondary": "low_cam_image",
+        "left_wrist": "left_wrist_image",
+        "right_wrist": "right_wrist_image",
+    },
+    "depth_obs_keys": {
+        "primary": None,
+        "secondary": None,
+        "wrist": None,
+    },
+    "state_obs_keys": ["state"],
+    "state_encoding": StateEncoding.JOINT_BIMANUAL,
+    "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
+    },
 }
