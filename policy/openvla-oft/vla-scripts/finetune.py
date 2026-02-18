@@ -4,6 +4,7 @@ finetune.py
 Fine-tunes OpenVLA via LoRA.
 """
 
+import gc
 import os
 import time
 from collections import deque
@@ -325,7 +326,7 @@ def init_module(
     module_args: dict,
     to_bf16: bool = False,
     find_unused_params: bool = False,
-) -> DDP:
+) -> nn.Module:
     """
     Initializes a module, optionally loads checkpoint, moves to device, and wraps with DDP.
 
@@ -339,7 +340,7 @@ def init_module(
         find_unused_params (bool): Whether to detect parameters without gradients in distributed training.
 
     Returns:
-        DistributedDataParallel: PyTorch module wrapped with DDP.
+        nn.Module: PyTorch module wrapped with DDP.
     """
     module = module_class(**module_args)
     count_parameters(module, module_name)
@@ -878,15 +879,57 @@ def save_training_checkpoint(
             )
 
     if cfg.use_fsdp:
-        full_optim_state = FSDP.full_optim_state_dict(vla, optimizer)
         save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+
+        # VLA: gather sharded params via FSDP collective state_dict()
+        # MUST call vla.state_dict() (on the FSDP wrapper) rather than
+        # vla.module.state_dict(), otherwise the all-gather is bypassed.
         with FSDP.state_dict_type(vla, StateDictType.FULL_STATE_DICT, save_policy):
-            if distributed_state.is_main_process:
-                _save_model_on_main()
+            cpu_state = vla.state_dict()
+
+        if distributed_state.is_main_process:
+            processor.save_pretrained(checkpoint_dir)
+            vla.module.save_pretrained(adapter_dir, state_dict=cpu_state)
+            if cfg.use_film:
+                vb_prefix = "base_model.model.vision_backbone."
+                vb_sd = {
+                    k[len(vb_prefix):]: v
+                    for k, v in cpu_state.items()
+                    if k.startswith(vb_prefix)
+                }
                 torch.save(
-                    {"optimizer": full_optim_state, "scheduler": scheduler.state_dict()},
-                    checkpoint_dir / "training_state.pt",
+                    vb_sd,
+                    checkpoint_dir / f"vision_backbone--{checkpoint_name_suffix}",
                 )
+
+        # Small DDP modules: save directly on main process
+        if distributed_state.is_main_process:
+            if cfg.use_proprio and proprio_projector is not None:
+                torch.save(
+                    proprio_projector.state_dict(),
+                    checkpoint_dir / f"proprio_projector--{checkpoint_name_suffix}",
+                )
+            if cfg.use_diffusion and noisy_action_projector is not None:
+                torch.save(
+                    noisy_action_projector.state_dict(),
+                    checkpoint_dir / f"noisy_action_projector--{checkpoint_name_suffix}",
+                )
+            if (cfg.use_l1_regression or cfg.use_diffusion) and action_head is not None:
+                torch.save(
+                    action_head.state_dict(),
+                    checkpoint_dir / f"action_head--{checkpoint_name_suffix}",
+                )
+
+        # Optimizer + scheduler: each rank saves its own state (VLA params are FSDP-sharded)
+        torch.save(
+            {"optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict()},
+            checkpoint_dir / f"training_state_rank{dist.get_rank()}.pt",
+        )
+
+        # Free memory after gathering the full 7B state dict
+        del cpu_state
+        gc.collect()
+        torch.cuda.empty_cache()
     else:
         if distributed_state.is_main_process:
             _save_model_on_main()
@@ -1259,21 +1302,28 @@ def finetune(cfg: FinetuneConfig) -> None:
 
     # === Resume logic ===
     if cfg.resume:
-        train_state_path = Path(cfg.vla_path) / "training_state.pt"
-        if not train_state_path.exists():
-            print(f"[Warning] no training_state.pt")
+        if cfg.use_fsdp:
+            rank = dist.get_rank()
+            train_state_path = Path(cfg.vla_path) / f"training_state_rank{rank}.pt"
         else:
+            train_state_path = Path(cfg.vla_path) / "training_state.pt"
+
+        if not train_state_path.exists():
+            print(f"[Warning] {train_state_path.name} not found")
+        else:
+            map_loc = f"cuda:{device_id}" if cfg.use_fsdp else "cpu"
             print(f"[Resume] Loading optimizer/scheduler from: {train_state_path}")
-            ckpt = torch.load(train_state_path, map_location="cpu")
+            ckpt = torch.load(train_state_path, map_location=map_loc)
 
             optimizer.load_state_dict(ckpt["optimizer"])
             scheduler.load_state_dict(ckpt["scheduler"])
 
-            # Move optimizer tensors to the right device (if needed)
-            for state in optimizer.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor):
-                        state[k] = v.to(vla.device)
+            if not cfg.use_fsdp:
+                # Move optimizer tensors to the right device (only needed for DDP)
+                for state in optimizer.state.values():
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            state[k] = v.to(vla.device)
 
         print(f"[Resume] Resumed from step {cfg.resume_step}")
 
