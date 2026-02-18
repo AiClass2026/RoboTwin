@@ -68,7 +68,7 @@ def main(args):
     random.seed(42)
     random.shuffle(all_eps)
 
-    n_val = int(len(all_eps) * args.percent_val)
+    n_val = max(1, int(len(all_eps) * args.percent_val))
     train_eps = all_eps[:-n_val]
     val_eps = all_eps[-n_val:]
 
