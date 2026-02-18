@@ -1,6 +1,7 @@
 """
 Loads a checkpoint that only has a LoRA adapter (no merged model) and merges the adapter
-into the base OpenVLA model. Saves the final checkpoint in the same directory.
+into the base OpenVLA model. Saves the final merged model to `save_path` (or to
+`lora_finetuned_checkpoint_dir` if `save_path` is not specified).
 
 Make sure to specify the correct base checkpoint when running this script. For example,
 - if you fine-tuned the default OpenVLA-7B model without modifications, then `--base_checkpoint=="openvla/openvla-7b"`
@@ -11,14 +12,15 @@ Make sure to specify the correct base checkpoint when running this script. For e
 Usage:
     python vla-scripts/merge_lora_weights_and_save.py \
         --base_checkpoint openvla/openvla-7b \
-        --lora_finetuned_checkpoint_dir /PATH/TO/CHECKPOINT/DIR/
+        --lora_finetuned_checkpoint_dir /PATH/TO/CHECKPOINT/DIR/ \
+        --save_path /PATH/TO/MERGED/MODEL/          # optional; defaults to lora_finetuned_checkpoint_dir
 """
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import draccus
 import torch
@@ -34,8 +36,9 @@ from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, Pr
 class ConvertConfig:
     # fmt: off
 
-    base_checkpoint: Union[str, Path] = ""                   # Base model checkpoint path/dir (either openvla/openvla-7b or whichever model you fine-tuned / resumed training from)
-    lora_finetuned_checkpoint_dir: Union[str, Path] = ""     # Checkpoint directory containing the LoRA adapter
+    base_checkpoint: Union[str, Path] = ""                    # Base model checkpoint path/dir
+    lora_finetuned_checkpoint_dir: Union[str, Path] = ""      # Checkpoint directory containing the LoRA adapter
+    save_path: Optional[Union[str, Path]] = None              # Where to save the merged model; defaults to lora_finetuned_checkpoint_dir
 
     # fmt: on
 
@@ -47,6 +50,9 @@ def main(cfg: ConvertConfig) -> None:
     AutoImageProcessor.register(OpenVLAConfig, PrismaticImageProcessor)
     AutoProcessor.register(OpenVLAConfig, PrismaticProcessor)
     AutoModelForVision2Seq.register(OpenVLAConfig, OpenVLAForActionPrediction)
+
+    output_dir = Path(cfg.save_path) if cfg.save_path else Path(cfg.lora_finetuned_checkpoint_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load Model using HF AutoClasses
     print(f"Loading base model: {cfg.base_checkpoint}")
@@ -60,13 +66,13 @@ def main(cfg: ConvertConfig) -> None:
     # Load LoRA weights and merge into base model, then save final checkpoint
     print("Merging LoRA weights into base model...")
     start_time = time.time()
-    merged_vla = PeftModel.from_pretrained(vla, os.path.join(cfg.lora_finetuned_checkpoint_dir, "lora_adapter")).to(
-        "cuda"
-    )
+    merged_vla = PeftModel.from_pretrained(
+        vla, os.path.join(cfg.lora_finetuned_checkpoint_dir, "lora_adapter")
+    ).to("cuda")
     merged_vla = merged_vla.merge_and_unload()
-    merged_vla.save_pretrained(cfg.lora_finetuned_checkpoint_dir)
+    merged_vla.save_pretrained(output_dir)
     print(f"\nMerging complete! Time elapsed (sec): {time.time() - start_time}")
-    print(f"\nSaved merged model checkpoint at:\n{cfg.lora_finetuned_checkpoint_dir}")
+    print(f"\nSaved merged model checkpoint at:\n{output_dir}")
 
 
 if __name__ == "__main__":
