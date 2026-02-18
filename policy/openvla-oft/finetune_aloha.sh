@@ -1,11 +1,18 @@
 # In experiments, global batch size of less than 16 will easily lead to unsuccessful training, where the training and validation 
 # loss would not converge low enough, and the final policy would repeat one trajectory regardless of the visual and language inputs.
+
+# 项目根目录
+project_root=/zixiao/code/AiClass/RoboTwin
+
 export WANDB_MODE=disabled
-torchrun --standalone --nnodes 1 --nproc-per-node 4 vla-scripts/finetune.py \
-  --vla_path /root/autodl-tmp/OpenVLA-7B \
-  --data_root_dir /root/tensorflow_datasets \
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+torchrun --standalone --nnodes 1 --nproc-per-node 2 vla-scripts/finetune.py \
+  --vla_path openvla/openvla-7b \
+  --data_root_dir ${project_root}/data/oft-rlds \
   --dataset_name aloha_beat_block_hammer \
-  --run_root_dir /root/autodl-tmp/RoboTwin/ckpt \
+  --run_root_dir ${project_root}/ckpt \
   --use_l1_regression True \
   --use_diffusion False \
   --use_film True \
