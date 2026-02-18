@@ -4,17 +4,19 @@ RoboTwin 通用 RLDS 数据集 Builder
 用法 (从项目根目录运行):
     python policy/openvla-oft/datasets/robotwin_builder.py \
         --task_name beat_block_hammer \
-        --data_dir data/beat_block_hammer/processed_openvla
+        --data_dir data/beat_block_hammer/processed_openvla \
+        --save_path /path/to/output
 
 或 (从 policy/openvla-oft/ 目录运行):
     python -m datasets.robotwin_builder \
         --task_name beat_block_hammer \
-        --data_dir ../../data/beat_block_hammer/processed_openvla
+        --data_dir ../../data/beat_block_hammer/processed_openvla \
+        --save_path /path/to/output
 
 会自动:
 1. 动态创建名为 aloha_{task_name} 的 builder 类
 2. 从 data_dir/train/*.hdf5 和 data_dir/val/*.hdf5 读取数据
-3. 生成 TFRecord 到 ~/tensorflow_datasets/aloha_{task_name}/
+3. 生成 TFRecord 到 save_path/aloha_{task_name}/（默认 ~/tensorflow_datasets/aloha_{task_name}/）
 
 注意: 运行前需手动在 configs.py / transforms.py / mixtures.py 中注册数据集
 """
@@ -223,17 +225,28 @@ def main():
         "--data_dir", type=str, required=True,
         help="预处理后的数据目录（包含 train/ 和 val/ 子目录）",
     )
+    parser.add_argument(
+        "--save_path", type=str, default=None,
+        help="RLDS 数据集输出目录（默认 ~/tensorflow_datasets/）",
+    )
     args = parser.parse_args()
 
     dataset_name = f"aloha_{args.task_name}"
+    save_path = args.save_path
+    if save_path is not None:
+        save_path = os.path.abspath(os.path.expanduser(save_path))
+        os.makedirs(save_path, exist_ok=True)
+
     print(f"数据集名称: {dataset_name}")
     print(f"数据目录: {args.data_dir}")
+    print(f"输出目录: {save_path or '~/tensorflow_datasets/'}")
 
     print(f"\n构建 RLDS 数据集...")
     BuilderClass = make_builder_class(dataset_name, args.data_dir)
-    builder = BuilderClass()
+    builder = BuilderClass(data_dir=save_path)
     builder.download_and_prepare()
-    print(f"\n完成！TFRecord 已生成到: ~/tensorflow_datasets/{dataset_name}/")
+    output_dir = save_path or os.path.expanduser("~/tensorflow_datasets")
+    print(f"\n完成！TFRecord 已生成到: {output_dir}/{dataset_name}/")
 
 
 if __name__ == "__main__":
