@@ -16,10 +16,19 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import tqdm
+from functools import partial
 from accelerate import PartialState
 from huggingface_hub import HfApi, snapshot_download
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed.fsdp import (
+    FullyShardedDataParallel as FSDP,
+    FullStateDictConfig,
+    MixedPrecision,
+    ShardingStrategy,
+    StateDictType,
+)
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import DataLoader
@@ -95,7 +104,7 @@ class FinetuneConfig:
     # Training configuration
     batch_size: int = 8                              # Batch size per device (total batch size = batch_size * num GPUs)
     learning_rate: float = 5e-4                      # Learning rate
-    lr_warmup_steps: int = 0                         # Number of steps to warm up learning rate (from 10% to 100%)
+    lr_warmup_steps: int = 0                         # Number of steps to warm up learning rate (from 10%% to 100%%)
     num_steps_before_decay: int = 100_000            # Number of steps before LR decays by 10x
     grad_accumulation_steps: int = 1                 # Number of gradient accumulation steps
     max_steps: int = 200_000                         # Max number of training steps
@@ -110,6 +119,10 @@ class FinetuneConfig:
     resume_base_model_path: Optional[str] = None      # Set when merge_lora_during_training is False. Will load base vla in this path
     image_aug: bool = True                           # If True, trains with image augmentations (HIGHLY RECOMMENDED)
     diffusion_sample_freq: int = 50                  # (When `use_diffusion==True`) Frequency for sampling in steps
+
+    # Parallelism & memory
+    use_fsdp: bool = False                           # If True, uses FSDP instead of DDP (shards model across GPUs)
+    gradient_checkpointing: bool = False             # If True, trades compute for memory by recomputing activations
 
     # LoRA
     use_lora: bool = True                            # If True, uses LoRA fine-tuning
@@ -231,6 +244,37 @@ class IdentityWrapper(nn.Module):
 
     def forward(self, *args, **kwargs):
         return self.module(*args, **kwargs)
+
+
+def _get_llm_transformer_layer_cls():
+    """Auto-detect the LLM decoder layer class for FSDP auto-wrap policy."""
+    try:
+        from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+        return LlamaDecoderLayer
+    except ImportError:
+        raise RuntimeError("Cannot detect LLM decoder layer class for FSDP wrapping.")
+
+
+def wrap_fsdp(module: nn.Module, device_id: int) -> FSDP:
+    layer_cls = _get_llm_transformer_layer_cls()
+    auto_policy = partial(
+        transformer_auto_wrap_policy,
+        transformer_layer_cls={layer_cls},
+    )
+    mp_policy = MixedPrecision(
+        param_dtype=torch.bfloat16,
+        reduce_dtype=torch.bfloat16,
+        buffer_dtype=torch.bfloat16,
+    )
+    return FSDP(
+        module,
+        auto_wrap_policy=auto_policy,
+        mixed_precision=mp_policy,
+        sharding_strategy=ShardingStrategy.FULL_SHARD,
+        device_id=device_id,
+        use_orig_params=True,
+        limit_all_gathers=True,
+    )
 
 
 def wrap_ddp(module: nn.Module, device_id: int, find_unused: bool = False) -> nn.Module:
@@ -807,43 +851,48 @@ def save_training_checkpoint(
     if distributed_state.num_processes > 1:
         dist.barrier()
 
-    if distributed_state.is_main_process:
-        # Save processor and LoRA adapter
+    def _save_model_on_main():
+        """Save model components (must be called on main process)."""
         processor.save_pretrained(checkpoint_dir)
         vla.module.save_pretrained(adapter_dir)
 
-        # Save base model, optimizer, scheduler
-        torch.save(
-            {
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-            },
-            checkpoint_dir / "training_state.pt",
-        )
-
-        # Save additional modules
         if cfg.use_proprio and proprio_projector is not None:
             torch.save(
                 proprio_projector.state_dict(),
                 checkpoint_dir / f"proprio_projector--{checkpoint_name_suffix}",
             )
-
         if cfg.use_diffusion and noisy_action_projector is not None:
             torch.save(
                 noisy_action_projector.state_dict(),
                 checkpoint_dir / f"noisy_action_projector--{checkpoint_name_suffix}",
             )
-
         if (cfg.use_l1_regression or cfg.use_diffusion) and action_head is not None:
             torch.save(
                 action_head.state_dict(),
                 checkpoint_dir / f"action_head--{checkpoint_name_suffix}",
             )
-
         if cfg.use_film:
             torch.save(
                 vla.module.vision_backbone.state_dict(),
                 checkpoint_dir / f"vision_backbone--{checkpoint_name_suffix}",
+            )
+
+    if cfg.use_fsdp:
+        full_optim_state = FSDP.full_optim_state_dict(vla, optimizer)
+        save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        with FSDP.state_dict_type(vla, StateDictType.FULL_STATE_DICT, save_policy):
+            if distributed_state.is_main_process:
+                _save_model_on_main()
+                torch.save(
+                    {"optimizer": full_optim_state, "scheduler": scheduler.state_dict()},
+                    checkpoint_dir / "training_state.pt",
+                )
+    else:
+        if distributed_state.is_main_process:
+            _save_model_on_main()
+            torch.save(
+                {"optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict()},
+                checkpoint_dir / "training_state.pt",
             )
 
     if distributed_state.num_processes > 1:
@@ -1044,24 +1093,17 @@ def finetune(cfg: FinetuneConfig) -> None:
         dist.barrier()
 
     # Load processor and VLA
-    if cfg.resume:
-        processor = AutoProcessor.from_pretrained(
-            cfg.resume_base_model_path, trust_remote_code=True
-        )
-        vla = AutoModelForVision2Seq.from_pretrained(
-            cfg.resume_base_model_path,
-            torch_dtype=torch.bfloat16,
-            low_cpu_mem_usage=True,
-            trust_remote_code=True,
-        ).to(device_id)
-    else:
-        processor = AutoProcessor.from_pretrained(cfg.vla_path, trust_remote_code=True)
-        vla = AutoModelForVision2Seq.from_pretrained(
-            cfg.vla_path,
-            torch_dtype=torch.bfloat16,
-            low_cpu_mem_usage=True,
-            trust_remote_code=True,
-        ).to(device_id)
+    # When using FSDP, keep model on CPU; FSDP handles device placement during sharding.
+    _base_path = cfg.resume_base_model_path if cfg.resume else cfg.vla_path
+    processor = AutoProcessor.from_pretrained(_base_path, trust_remote_code=True)
+    vla = AutoModelForVision2Seq.from_pretrained(
+        _base_path,
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        trust_remote_code=True,
+    )
+    if not cfg.use_fsdp:
+        vla = vla.to(device_id)
 
     # Set number of images in VLA input
     vla.vision_backbone.set_num_images_in_input(cfg.num_images_in_input)
@@ -1107,10 +1149,21 @@ def finetune(cfg: FinetuneConfig) -> None:
                 "vision_backbone", cfg.vla_path, cfg.resume_step
             )
             vla.model.vision_backbone.load_state_dict(state_dict)
-        vla.model.vision_backbone = vla.model.vision_backbone.to(device_id)
+        if not cfg.use_fsdp:
+            vla.model.vision_backbone = vla.model.vision_backbone.to(device_id)
 
-    # Wrap VLA with DDP
-    vla = wrap_ddp(vla, device_id, find_unused=True)
+    # Gradient checkpointing (enable before FSDP wrapping so HF hooks are in place)
+    if cfg.gradient_checkpointing:
+        vla.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        print("[INFO] Gradient checkpointing enabled (use_reentrant=False)")
+
+    # Wrap VLA with DDP or FSDP
+    if cfg.use_fsdp:
+        vla = vla.to(dtype=torch.bfloat16)
+        vla = wrap_fsdp(vla, device_id)
+        print(f"[INFO] VLA wrapped with FSDP (FULL_SHARD)")
+    else:
+        vla = wrap_ddp(vla, device_id, find_unused=True)
 
     # If applicable, instantiate proprio projector
     if cfg.use_proprio:

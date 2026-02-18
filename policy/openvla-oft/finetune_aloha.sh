@@ -1,17 +1,20 @@
 # In experiments, global batch size of less than 16 will easily lead to unsuccessful training, where the training and validation 
 # loss would not converge low enough, and the final policy would repeat one trajectory regardless of the visual and language inputs.
-torchrun --standalone --nnodes 1 --nproc-per-node 2 vla-scripts/finetune.py \
-  --vla_path openvla/openvla-7b \
-  --data_root_dir somepath/tensorflow_datasets/ \
-  --dataset_name some_dataset_name_same_as_the_rlds_dataset_builder_class \
-  --run_root_dir dir_in_which_to_save_checkpoints \
+export WANDB_MODE=disabled
+torchrun --standalone --nnodes 1 --nproc-per-node 3 vla-scripts/finetune.py \
+  --vla_path /root/autodl-tmp/OpenVLA-7B \
+  --data_root_dir /root/tensorflow_datasets \
+  --dataset_name aloha_beat_block_hammer \
+  --run_root_dir /root/autodl-tmp/RoboTwin/ckpt \
   --use_l1_regression True \
   --use_diffusion False \
-  --use_film True \
+  --use_film False \
   --num_images_in_input 3 \
-  --grad_accumulation_steps 1 \
+  --use_fsdp True \
+  --gradient_checkpointing True \
+  --grad_accumulation_steps 6 \
   --use_proprio True \
-  --batch_size 2 \
+  --batch_size 1 \
   --learning_rate 5e-4 \
   --num_steps_before_decay 50000 \
   --max_steps 100005 \
