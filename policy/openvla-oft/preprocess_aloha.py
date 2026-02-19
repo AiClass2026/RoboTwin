@@ -64,7 +64,7 @@ def main(args):
     resize_size = args.img_resize_size
     instruction_dir = args.instruction_dir
 
-    all_eps = sorted(glob(os.path.join(input_dir, "*.hdf5")))[:100]
+    all_eps = sorted(glob(os.path.join(input_dir, "*.hdf5")))
     random.seed(42)
     random.shuffle(all_eps)
 

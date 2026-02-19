@@ -32,3 +32,4 @@ envs/curobo/*
 /*.txt
 
 ckpt/*
+runs/*
