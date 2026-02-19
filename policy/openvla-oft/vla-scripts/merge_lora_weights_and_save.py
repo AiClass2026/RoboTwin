@@ -17,8 +17,9 @@ Usage:
 """
 
 import os
+import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
@@ -27,6 +28,8 @@ import torch
 from peft import PeftModel
 from transformers import AutoConfig, AutoImageProcessor, AutoModelForVision2Seq, AutoProcessor
 
+import prismatic.extern.hf.configuration_prismatic as _configuration_prismatic_module
+import prismatic.extern.hf.modeling_prismatic as _modeling_prismatic_module
 from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
 from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
 from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, PrismaticProcessor
@@ -72,6 +75,11 @@ def main(cfg: ConvertConfig) -> None:
     merged_vla = merged_vla.merge_and_unload()
     merged_vla.save_pretrained(output_dir)
     print(f"\nMerging complete! Time elapsed (sec): {time.time() - start_time}")
+
+    for mod in [_configuration_prismatic_module, _modeling_prismatic_module]:
+        shutil.copy2(mod.__file__, output_dir / Path(mod.__file__).name)
+        print(f"Copied {Path(mod.__file__).name} to {output_dir}")
+
     print(f"\nSaved merged model checkpoint at:\n{output_dir}")
 
 
