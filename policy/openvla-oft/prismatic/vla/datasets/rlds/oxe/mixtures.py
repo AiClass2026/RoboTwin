@@ -258,8 +258,9 @@ OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
     ],
     # [RoboTwin] beat_block_hammer 单任务训练，权重 1.0
     # 多任务训练时可添加多个 (dataset_name, weight) 元组调整采样比例
-    "aloha_beat_block_hammer": [
+    "aloha_beat_block_hammer_mix": [
         ("aloha_beat_block_hammer", 1.0),
+        ("aloha_beat_block_hammer_random", 1.0),
     ],
 # fmt: on
 }

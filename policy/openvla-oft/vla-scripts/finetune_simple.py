@@ -10,6 +10,7 @@ import os
 import random
 import time
 from collections import deque
+from datetime import datetime
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -121,6 +122,7 @@ class FinetuneConfig:
     # Logging
     log_dir: Path = Path("logs")                     # TensorBoard log directory
     log_freq: int = 10                               # TensorBoard logging frequency in steps
+    run_id_note: Optional[str] = None                # Extra note to append to run_id (e.g. timestamp)
     # fmt: on
 
 
@@ -156,6 +158,8 @@ def get_run_id(cfg: FinetuneConfig) -> str:
             run_id += f"+lora-r{cfg.lora_rank}+dropout-{cfg.lora_dropout}"
         if cfg.image_aug:
             run_id += "--image_aug"
+        if cfg.run_id_note is not None:
+            run_id = f"{cfg.run_id_note}--{run_id}"
     return run_id
 
 

@@ -873,19 +873,35 @@ OXE_DATASET_CONFIGS = {
     # state_obs_keys: 对应 RLDS 中 observation/state (14维关节角度绝对值)
     # action_encoding: JOINT_POS_BIMANUAL → 14维双臂关节角度绝对值
     "aloha_beat_block_hammer": {
-    "image_obs_keys": {
-        "primary": "image",
-        "secondary": "low_cam_image",
-        "left_wrist": "left_wrist_image",
-        "right_wrist": "right_wrist_image",
+        "image_obs_keys": {
+            "primary": "image",
+            "secondary": "low_cam_image",
+            "left_wrist": "left_wrist_image",
+            "right_wrist": "right_wrist_image",
+        },
+        "depth_obs_keys": {
+            "primary": None,
+            "secondary": None,
+            "wrist": None,
+        },
+        "state_obs_keys": ["state"],
+        "state_encoding": StateEncoding.JOINT_BIMANUAL,
+        "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
     },
-    "depth_obs_keys": {
-        "primary": None,
-        "secondary": None,
-        "wrist": None,
-    },
-    "state_obs_keys": ["state"],
-    "state_encoding": StateEncoding.JOINT_BIMANUAL,
-    "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
+    "aloha_beat_block_hammer_random": {
+        "image_obs_keys": {
+            "primary": "image",
+            "secondary": "low_cam_image",
+            "left_wrist": "left_wrist_image",
+            "right_wrist": "right_wrist_image",
+        },
+        "depth_obs_keys": {
+            "primary": None,
+            "secondary": None,
+            "wrist": None,
+        },
+        "state_obs_keys": ["state"],
+        "state_encoding": StateEncoding.JOINT_BIMANUAL,
+        "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
     },
 }

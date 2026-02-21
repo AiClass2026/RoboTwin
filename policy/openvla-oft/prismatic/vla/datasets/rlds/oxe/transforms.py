@@ -940,4 +940,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "aloha_place_object_scale":aloha_dataset_transform,
     "aloha_stack_bowls_three_clean_builder":aloha_dataset_transform,
     "aloha_beat_block_hammer": aloha_dataset_transform,  # [RoboTwin] 数据已是标准格式，无需额外变换
+    "aloha_beat_block_hammer_random": aloha_dataset_transform,
 }

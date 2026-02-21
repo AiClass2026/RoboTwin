@@ -158,8 +158,6 @@ aloha_ckpts_and_logs
 
 eval_*.share
 
-finetune_*.sh
-
 log.txt
 
 tensorflow_datasets

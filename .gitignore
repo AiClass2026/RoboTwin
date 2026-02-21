@@ -33,3 +33,4 @@ envs/curobo/*
 
 ckpt/*
 runs/*
+.sii/*
