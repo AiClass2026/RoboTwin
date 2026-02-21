@@ -46,6 +46,61 @@ class ConvertConfig:
     # fmt: on
 
 
+def _copy_required_aux_files(source_dir: Path, output_dir: Path) -> None:
+    """
+    Copy only inference-required auxiliary files from source checkpoint to output.
+    """
+    required_files = [
+        "dataset_statistics.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer.model",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "added_tokens.json",
+    ]
+    required_patterns = [
+        "action_head--*_checkpoint.pt",
+        "proprio_projector--*_checkpoint.pt",
+        "vision_backbone--*_checkpoint.pt",
+        "noisy_action_projector--*_checkpoint.pt",
+    ]
+
+    copied_files = []
+    skipped_files = []
+
+    for filename in required_files:
+        src = source_dir / filename
+        dst = output_dir / filename
+        if src.exists():
+            if src.resolve() != dst.resolve():
+                shutil.copy2(src, dst)
+            copied_files.append(filename)
+        else:
+            skipped_files.append(filename)
+
+    for pattern in required_patterns:
+        matches = sorted(source_dir.glob(pattern))
+        if not matches:
+            skipped_files.append(pattern)
+            continue
+
+        for src in matches:
+            dst = output_dir / src.name
+            if src.resolve() != dst.resolve():
+                shutil.copy2(src, dst)
+            copied_files.append(src.name)
+
+    if copied_files:
+        print("\nCopied required auxiliary files:")
+        for name in copied_files:
+            print(f"  - {name}")
+    if skipped_files:
+        print("\nSkipped missing optional files/patterns:")
+        for name in skipped_files:
+            print(f"  - {name}")
+
+
 @draccus.wrap()
 def main(cfg: ConvertConfig) -> None:
     # Register OpenVLA model to HF Auto Classes (not needed if the model is on HF Hub)
@@ -54,7 +109,8 @@ def main(cfg: ConvertConfig) -> None:
     AutoProcessor.register(OpenVLAConfig, PrismaticProcessor)
     AutoModelForVision2Seq.register(OpenVLAConfig, OpenVLAForActionPrediction)
 
-    output_dir = Path(cfg.save_path) if cfg.save_path else Path(cfg.lora_finetuned_checkpoint_dir)
+    source_dir = Path(cfg.lora_finetuned_checkpoint_dir)
+    output_dir = Path(cfg.save_path) if cfg.save_path else source_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load Model using HF AutoClasses
@@ -77,8 +133,14 @@ def main(cfg: ConvertConfig) -> None:
     print(f"\nMerging complete! Time elapsed (sec): {time.time() - start_time}")
 
     for mod in [_configuration_prismatic_module, _modeling_prismatic_module]:
-        shutil.copy2(mod.__file__, output_dir / Path(mod.__file__).name)
-        print(f"Copied {Path(mod.__file__).name} to {output_dir}")
+        module_file = mod.__file__
+        if module_file is None:
+            continue
+        module_name = Path(module_file).name
+        shutil.copy2(module_file, output_dir / module_name)
+        print(f"Copied {module_name} to {output_dir}")
+
+    _copy_required_aux_files(source_dir, output_dir)
 
     print(f"\nSaved merged model checkpoint at:\n{output_dir}")
 
